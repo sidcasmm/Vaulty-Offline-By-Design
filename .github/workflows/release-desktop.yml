@@ -46,12 +46,21 @@ jobs:
           repository: sidcasmm/Vaulty
           ref: ${{ inputs.ref }}
 
+      - name: Allow long Windows paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.longpaths true
+
       - name: Checkout Flutter
         uses: actions/checkout@v4
         with:
           repository: flutter/flutter
           ref: 37e47b664e8d7c37e60a6b056cc4959b791fe879
           path: flutter-sdk
+
+      - name: Stamp Flutter version
+        shell: bash
+        run: git -C flutter-sdk tag 3.49.0-0.2.pre
 
       - name: Add Flutter to PATH
         shell: bash
