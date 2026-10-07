@@ -1,0 +1,129 @@
+name: Desktop release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch or tag in sidcasmm/Vaulty
+        required: true
+        default: main
+      version:
+        description: Release version, such as 1.0.0
+        required: true
+        default: "1.0.0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS
+            target: macos
+            package: Vaulty-macOS.dmg
+          - os: windows-latest
+            label: Windows
+            target: windows
+            package: Vaulty-Windows.zip
+          - os: ubuntu-latest
+            label: Linux
+            target: linux
+            package: Vaulty-Linux.tar.gz
+    steps:
+      - name: Checkout Vaulty
+        uses: actions/checkout@v4
+        with:
+          repository: sidcasmm/Vaulty
+          ref: ${{ inputs.ref }}
+
+      - name: Checkout Flutter
+        uses: actions/checkout@v4
+        with:
+          repository: flutter/flutter
+          ref: 37e47b664e
+          path: flutter-sdk
+          fetch-depth: 1
+
+      - name: Add Flutter to PATH
+        shell: bash
+        run: echo "$GITHUB_WORKSPACE/flutter-sdk/bin" >> "$GITHUB_PATH"
+
+      - name: Install Linux build tools
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev
+
+      - name: Build
+        shell: bash
+        run: |
+          flutter config --no-analytics --enable-${{ matrix.target }}-desktop
+          flutter pub get
+          flutter build ${{ matrix.target }} --release
+
+      - name: Package macOS
+        if: matrix.target == 'macos'
+        run: |
+          hdiutil create \
+            -volname "Vaulty" \
+            -srcfolder build/macos/Build/Products/Release/vaulty.app \
+            -ov -format UDZO \
+            Vaulty-macOS.dmg
+
+      - name: Package Windows
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath Vaulty-Windows.zip
+
+      - name: Package Linux
+        if: matrix.target == 'linux'
+        run: tar -C build/linux/x64/release/bundle -czf "$GITHUB_WORKSPACE/Vaulty-Linux.tar.gz" .
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: ${{ matrix.package }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          tag="v${VERSION}"
+          notes="Desktop builds of Vaulty ${VERSION}. Android and iOS are on their stores."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" Vaulty-macOS.dmg Vaulty-Windows.zip Vaulty-Linux.tar.gz --clobber
+          else
+            gh release create "$tag" \
+              --target main \
+              --title "Vaulty ${VERSION}" \
+              --notes "$notes" \
+              Vaulty-macOS.dmg \
+              Vaulty-Windows.zip \
+              Vaulty-Linux.tar.gz
+          fi
